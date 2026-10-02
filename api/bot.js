@@ -12,7 +12,7 @@ const coreApi = new midtransClient.CoreApi({
 // --- MENU UTAMA ---
 const tampilkanMenuUtama = (nama) => {
     return {
-        text: `Halo *${nama}*! 👋\n\nSelamat datang di *Portal Langganan Premium*.\nSilakan pilih layanan yang ingin kamu perpanjang:`,
+        text: `Halo *${nama}*! 👋\n\nSelamat datang di *Portal Langganan F-Store*.\nSilakan pilih layanan yang ingin kamu perpanjang:`,
         options: {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
