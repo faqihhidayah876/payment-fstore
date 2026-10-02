@@ -12,7 +12,7 @@ const coreApi = new midtransClient.CoreApi({
 // --- MENU UTAMA ---
 const tampilkanMenuUtama = (nama) => {
     return {
-        text: `Halo *${nama}*! 👋\n\nSelamat datang di *Portal Langganan F-Store*.\nSilakan pilih layanan yang ingin kamu perpanjang:`,
+        text: `Halo *${nama}*! 👋\n\nSelamat datang di *Portal Langganan Premium*.\nSilakan pilih layanan yang ingin kamu perpanjang:`,
         options: {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
@@ -29,19 +29,49 @@ bot.start(async (ctx) => {
     const telegram_id = ctx.from.id;
     const nama = ctx.from.first_name;
     
-    // Cek apakah user sudah terdaftar berdasarkan telegram_id
     const { data } = await supabase.from('subscriptions').select('*').eq('telegram_id', telegram_id).single();
     
-    // Jika belum ada, buat entri baru untuknya
+    let pesanStart = `Halo *${nama}*! 👋\n\nSelamat datang di *Portal Langganan Premium*.`;
+    
+    // Jika belum terdaftar sama sekali, beri instruksi kode klaim
     if (!data) {
-        await supabase.from('subscriptions').insert([{ telegram_id: telegram_id, nama: nama, status_aktif: false }]);
+        pesanStart += `\n\n⚠️ _Jika kamu adalah anggota Family Sharing lama, silakan hubungkan data kamu dengan mengetik:_ \`/klaim KODE_KAMU\`\n_(Contoh: /klaim HSB123)_`;
     }
 
     const menu = tampilkanMenuUtama(nama);
-    await ctx.reply(menu.text, menu.options);
+    await ctx.reply(pesanStart, menu.options);
 });
 
-// --- MENU CANVA (Pilihan Harga) ---
+// 2. Command /klaim KODE (Sistem Sinkronisasi)
+bot.command('klaim', async (ctx) => {
+    const teks = ctx.message.text;
+    const argumen = teks.split(' '); // Memisahkan "/klaim" dan "KODENYA"
+
+    if (argumen.length !== 2) {
+        return ctx.reply('⚠️ Format salah. Ketik dengan format:\n`/klaim KODE_DARI_ADMIN`', { parse_mode: 'Markdown' });
+    }
+
+    const kode_klaim = argumen[1];
+    const telegram_id = ctx.from.id;
+
+    // Cari kode di database
+    const { data, error } = await supabase.from('subscriptions').select('*').eq('kode_sinkronisasi', kode_klaim).single();
+
+    if (error || !data) {
+        return ctx.reply('❌ Kode tidak valid atau tidak ditemukan. Pastikan ketikanmu benar atau hubungi Admin.');
+    }
+
+    if (data.telegram_id) {
+        return ctx.reply('⚠️ Kode ini sudah terpakai dan tertaut dengan akun Telegram lain.');
+    }
+
+    // Hubungkan ID Telegram dan hapus kode agar tidak bisa diklaim 2x
+    await supabase.from('subscriptions').update({ telegram_id: telegram_id, kode_sinkronisasi: null }).eq('id', data.id);
+
+    ctx.reply(`✅ *Sinkronisasi Berhasil!*\n\nSelamat datang kembali, *${data.nama}*! Akun Telegram kamu telah terhubung dengan layanan *${data.layanan}*.\nKetik /start untuk membuka menu utama.`, { parse_mode: 'Markdown' });
+});
+
+// --- MENU CANVA ---
 bot.action('menu_canva', async (ctx) => {
     await ctx.editMessageText('🎨 *Pilih durasi perpanjangan Canva Pro:*', {
         parse_mode: 'Markdown',
@@ -55,29 +85,37 @@ bot.action('menu_canva', async (ctx) => {
     });
 });
 
-// Kembalikan ke menu utama
 bot.action('kembali_menu', async (ctx) => {
     const menu = tampilkanMenuUtama(ctx.from.first_name);
     await ctx.editMessageText(menu.text, menu.options);
 });
 
-// --- FUNGSI GENERATE QRIS DENGAN KODE UNIK ---
+// --- FUNGSI GENERATE QRIS (DIPERBARUI) ---
 const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan) => {
     await ctx.editMessageText(`⏳ _Sedang menyiapkan tagihan QRIS untuk ${namaLayanan}..._`, { parse_mode: 'Markdown' });
 
-    // Membuat kode unik 3 digit acak (1 - 999)
     const kodeUnik = Math.floor(Math.random() * 999) + 1;
-    const totalBayar = hargaAsli + kodeUnik; // Contoh: 15000 + 345 = 15345
-
+    const totalBayar = hargaAsli + kodeUnik; 
     const telegram_id = ctx.from.id;
     const order_id = `${kodeLayanan}-${telegram_id}-${Date.now()}`; 
     
+    // Simpan/Update data user beserta last_order_id ke Supabase
+    const { data } = await supabase.from('subscriptions').select('id').eq('telegram_id', telegram_id).single();
+    if (!data) {
+        await supabase.from('subscriptions').insert([{ 
+            telegram_id: telegram_id, 
+            nama: ctx.from.first_name, 
+            layanan: namaLayanan.split(' ')[0], 
+            status_aktif: false, 
+            last_order_id: order_id 
+        }]);
+    } else {
+        await supabase.from('subscriptions').update({ last_order_id: order_id }).eq('telegram_id', telegram_id);
+    }
+
     let parameter = {
         "payment_type": "qris",
-        "transaction_details": {
-            "order_id": order_id,
-            "gross_amount": totalBayar // Mengirim harga yang sudah ditambah kode unik
-        }
+        "transaction_details": { "order_id": order_id, "gross_amount": totalBayar }
     };
 
     try {
@@ -88,7 +126,7 @@ const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan) => {
         await ctx.replyWithPhoto(
             { url: qrisUrl }, 
             { 
-                caption: `✅ *Tagihan Dibuat!*\n\n💻 *Layanan:* ${namaLayanan}\n💰 *Total:* *Rp${totalBayar.toLocaleString('id-ID')}* _(Terdapat kode unik)_\n\nSilakan _scan_ gambar QRIS ini menggunakan E-Wallet pilihanmu.`, 
+                caption: `✅ *Tagihan Dibuat!*\n\n🧾 *Order ID:* \`${order_id}\`\n💻 *Layanan:* ${namaLayanan}\n💰 *Total:* *Rp${totalBayar.toLocaleString('id-ID')}*\n\n_Silakan bayar sesuai nominal. Jika pembayaran berhasil namun akses belum masuk, copy Order ID di atas dan kirimkan ke Admin._`, 
                 parse_mode: 'Markdown',
                 ...Markup.inlineKeyboard([[Markup.button.callback('❌ Batalkan Pesanan', 'batal_pesanan')]])
             }
@@ -98,8 +136,7 @@ const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan) => {
     }
 };
 
-// Routing Tombol Pembayaran
-bot.action('bayar_gemini', (ctx) => prosesTagihan(ctx, 'Gemini Pro (1 Bulan)', 15000, 'GEMINI'));
+bot.action('bayar_gemini', (ctx) => prosesTagihan(ctx, 'Gemini Pro (1 Bulan)', 15000, 'GEMINI1M'));
 bot.action('canva_1m', (ctx) => prosesTagihan(ctx, 'Canva Pro (1 Bulan)', 5000, 'CANVA1M'));
 bot.action('canva_3m', (ctx) => prosesTagihan(ctx, 'Canva Pro (3 Bulan)', 13000, 'CANVA3M'));
 bot.action('canva_6m', (ctx) => prosesTagihan(ctx, 'Canva Pro (6 Bulan)', 25000, 'CANVA6M'));
@@ -111,22 +148,27 @@ bot.action('batal_pesanan', async (ctx) => {
     await ctx.reply('🚫 _Pembuatan tagihan telah dibatalkan._', menu.options);
 });
 
-// --- CEK STATUS & RIWAYAT DARI SUPABASE ---
+// --- CEK STATUS & RIWAYAT ---
 bot.action('cek_status', async (ctx) => {
     const telegram_id = ctx.from.id;
     const { data, error } = await supabase.from('subscriptions').select('*').eq('telegram_id', telegram_id).single();
 
-    if (error || !data || !data.layanan) {
-        return ctx.reply('⚠️ *Data Belum Ditemukan*\nSepertinya akun Telegram kamu belum dihubungkan dengan data undangan (Family Sharing) dari Admin. Silakan hubungi Admin untuk menghubungkan ID ini.', { parse_mode: 'Markdown' });
+    if (error || !data) {
+        return ctx.reply('⚠️ *Data Belum Ditemukan*\nSilakan lakukan `/klaim` jika kamu punya kode dari Admin, atau beli layanan terlebih dahulu.', { parse_mode: 'Markdown' });
     }
 
-    const statusPesan = data.status_aktif ? "✅ LUNAS" : "❌ BELUM BAYAR";
-    const pesan = `📋 *RIWAYAT AKUN KAMU*\n\n👤 *Nama Terdaftar:* ${data.nama}\n📧 *Email Induk:* ${data.email_family}\n💻 *Layanan:* ${data.layanan}\n🔖 *Status Tagihan:* ${statusPesan}`;
+    const statusPesan = data.status_aktif ? "✅ AKTIF" : "❌ BELUM BAYAR / HABIS";
     
+    // Format tanggal ke gaya Indonesia
+    const formatTanggal = data.jatuh_tempo 
+        ? new Date(data.jatuh_tempo).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
+        : 'Belum ada data pembayaran';
+
+    const pesan = `📋 *RIWAYAT AKUN KAMU*\n\n👤 *Nama:* ${data.nama}\n💻 *Layanan:* ${data.layanan || '-'}\n🔖 *Status:* ${statusPesan}\n⏳ *Berlaku Sampai:* ${formatTanggal}`;
     await ctx.reply(pesan, { parse_mode: 'Markdown' });
 });
 
-// Webhook Vercel
+// --- WEBHOOK & LOGIKA PENAMBAHAN HARI ---
 export default async function handler(req, res) {
   if (req.method === 'POST') {
     if (req.body.message || req.body.callback_query) {
@@ -139,9 +181,37 @@ export default async function handler(req, res) {
        const order_id = req.body.order_id; 
        
        if (status === 'settlement' || status === 'capture') {
-           const telegram_id = order_id.split('-')[1]; 
-           await supabase.from('subscriptions').update({ status_aktif: true }).eq('telegram_id', parseInt(telegram_id));
-           await bot.telegram.sendMessage(telegram_id, '🎉 *Pembayaran Lunas!*\nAkses kamu sudah otomatis diperpanjang.', { parse_mode: 'Markdown' });
+           const parts = order_id.split('-');
+           const kodeLayanan = parts[0]; // GEMINI1M, CANVA3M, dll
+           const telegram_id = parts[1]; 
+           
+           // Penentuan jumlah hari perpanjangan
+           let tambahanHari = 30; // Default 1 bulan
+           if (kodeLayanan === 'CANVA3M') tambahanHari = 90;
+           if (kodeLayanan === 'CANVA6M') tambahanHari = 180;
+           if (kodeLayanan === 'CANVA1Y') tambahanHari = 365;
+
+           // Ambil jatuh_tempo saat ini
+           const { data: user } = await supabase.from('subscriptions').select('jatuh_tempo').eq('telegram_id', parseInt(telegram_id)).single();
+           
+           let tanggalDasar = new Date(); // Hitung mulai hari ini
+           // Jika masa aktif masih ada, tambahkan harinya dari tanggal masa aktif terakhir
+           if (user && user.jatuh_tempo) {
+               const currentJatuhTempo = new Date(user.jatuh_tempo);
+               if (currentJatuhTempo > tanggalDasar) {
+                   tanggalDasar = currentJatuhTempo;
+               }
+           }
+           
+           // Tambahkan hari sesuai paket
+           tanggalDasar.setDate(tanggalDasar.getDate() + tambahanHari);
+           const newJatuhTempo = tanggalDasar.toISOString().split('T')[0];
+
+           await supabase.from('subscriptions')
+             .update({ status_aktif: true, jatuh_tempo: newJatuhTempo })
+             .eq('telegram_id', parseInt(telegram_id));
+             
+           await bot.telegram.sendMessage(telegram_id, `🎉 *Pembayaran Lunas!*\n\nAkses kamu berhasil diperpanjang selama *${tambahanHari} hari*. Masa aktif kamu sekarang hingga *${tanggalDasar.toLocaleDateString('id-ID')}*.`, { parse_mode: 'Markdown' });
        }
        return res.status(200).send('OK');
     }
