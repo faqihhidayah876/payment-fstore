@@ -186,7 +186,7 @@ bot.on('text', async (ctx) => {
 
 // --- Menu Canva ---
 bot.action('menu_canva', async (ctx) => {
-    await ctx.editMessageText('🎨 *Pilih durasi perpanjangan Canva Pro:*', {
+    await ctx.editMessageText('🎨 *Pilih durasi Canva Edu Pro:*', {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
             [Markup.button.callback('1 Bulan (Rp5.000)', 'canva_1m'), Markup.button.callback('3 Bulan (Rp13.000)', 'canva_3m')],
