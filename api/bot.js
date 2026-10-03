@@ -9,6 +9,11 @@ const coreApi = new midtransClient.CoreApi({
     serverKey: process.env.MIDTRANS_SERVER_KEY
 });
 
+// --- KONFIGURASI QRIS FALLBACK ---
+// GANTI URL DI BAWAH INI DENGAN LINK GAMBAR QRIS DANA MILIKMU
+// Tips: Upload gambar QRIS ke postimages.org / imgur, lalu copy Direct Link-nya
+const QRIS_FALLBACK_URL = "https://i.postimg.cc/bJn4G5ms/qris.jpg";
+
 // --- MENU UTAMA ---
 const tampilkanMenuUtama = (nama) => {
     return {
@@ -131,16 +136,17 @@ bot.action('kembali_menu', async (ctx) => {
     }
 });
 
-// --- FUNGSI GENERATE QRIS ---
+// --- FUNGSI GENERATE QRIS DENGAN SISTEM FALLBACK ---
 const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan) => {
-    await ctx.editMessageText(`⏳ _Sedang menyiapkan tagihan QRIS untuk ${namaLayanan}..._`, { parse_mode: 'Markdown' });
+    await ctx.editMessageText(`⏳ _Sedang menyiapkan tagihan untuk ${namaLayanan}..._`, { parse_mode: 'Markdown' });
 
+    // 1. Persiapan Data & Kode Unik
     const kodeUnik = Math.floor(Math.random() * 999) + 1;
     const totalBayar = hargaAsli + kodeUnik;
     const telegram_id = ctx.from.id;
     const order_id = `${kodeLayanan}-${telegram_id}-${Date.now()}`;
 
-    // Simpan/Update data user beserta last_order_id ke Supabase
+    // 2. Simpan order_id ke Supabase (berlaku untuk Midtrans maupun Fallback)
     const { data } = await supabase.from('subscriptions').select('id').eq('telegram_id', telegram_id).single();
     if (!data) {
         await supabase.from('subscriptions').insert([{
@@ -154,12 +160,12 @@ const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan) => {
         await supabase.from('subscriptions').update({ last_order_id: order_id }).eq('telegram_id', telegram_id);
     }
 
-    let parameter = {
-        "payment_type": "qris",
-        "transaction_details": { "order_id": order_id, "gross_amount": totalBayar }
-    };
-
     try {
+        // 3. PRIORITAS UTAMA: Mencoba API Midtrans
+        let parameter = {
+            "payment_type": "qris",
+            "transaction_details": { "order_id": order_id, "gross_amount": totalBayar }
+        };
         const chargeResponse = await coreApi.charge(parameter);
         const qrisUrl = chargeResponse.actions[0].url;
 
@@ -167,13 +173,28 @@ const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan) => {
         await ctx.replyWithPhoto(
             { url: qrisUrl },
             {
-                caption: `✅ *Tagihan Dibuat!*\n\n🧾 *Order ID:* \`${order_id}\`\n💻 *Layanan:* ${namaLayanan}\n💰 *Total:* *Rp${totalBayar.toLocaleString('id-ID')}*\n\n_Silakan bayar sesuai nominal. Jika pembayaran berhasil namun akses belum masuk, copy Order ID di atas dan kirimkan ke Admin._`,
+                caption: `✅ *Tagihan Dibuat! (Otomatis)*\n\n🧾 *Order ID:* \`${order_id}\`\n💻 *Layanan:* ${namaLayanan}\n💰 *Total:* *Rp${totalBayar.toLocaleString('id-ID')}*\n\n_Sistem akan memverifikasi pembayaranmu secara otomatis._`,
                 parse_mode: 'Markdown',
                 ...Markup.inlineKeyboard([[Markup.button.callback('❌ Batalkan Pesanan', 'batal_pesanan')]])
             }
         );
     } catch (error) {
-        await ctx.reply('❌ Sistem pembayaran sedang sibuk. Silakan coba beberapa saat lagi.');
+        // 4. SISTEM FALLBACK: Jika Midtrans Error / Belum Verifikasi
+        console.log("Midtrans gagal, beralih ke Fallback QRIS Statis...");
+        console.log("Error detail:", error.message);
+
+        try {
+            await ctx.deleteMessage();
+        } catch (e) { /* abaikan jika pesan sudah hilang */ }
+
+        await ctx.replyWithPhoto(
+            { url: QRIS_FALLBACK_URL },
+            {
+                caption: `⚠️ _Sistem otomatis sedang maintenance. Mengalihkan ke jalur manual..._\n\n✅ *Tagihan Dibuat!*\n\n🧾 *Order ID:* \`${order_id}\`\n💻 *Layanan:* ${namaLayanan}\n💰 *Total Bayar:* *Rp${totalBayar.toLocaleString('id-ID')}*\n\n⚠️ *PENTING:* Transfer **TEPAT** sejumlah nominal di atas hingga 3 digit terakhir (*Rp${totalBayar.toLocaleString('id-ID')}*).\n\n_Setelah transfer, COPY Order ID di atas dan berikan ke Admin untuk verifikasi manual._`,
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([[Markup.button.callback('❌ Batalkan Pesanan', 'batal_pesanan')]])
+            }
+        );
     }
 };
 
