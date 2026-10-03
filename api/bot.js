@@ -12,7 +12,7 @@ const coreApi = new midtransClient.CoreApi({
 // --- MENU UTAMA ---
 const tampilkanMenuUtama = (nama) => {
     return {
-        text: `Halo *${nama}*! 👋\n\nSelamat datang di *Portal Langganan Premium*.\nSilakan pilih layanan yang ingin kamu perpanjang:`,
+        text: `👑 *f-store* ✨\nProduk langganan digital premium otomatis.\n\nHalo *${nama}*! 🔥\n\n⬇️ *Pilih menu di bawah buat mulai:*`,
         options: {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
@@ -31,14 +31,14 @@ bot.start(async (ctx) => {
 
     const { data } = await supabase.from('subscriptions').select('*').eq('telegram_id', telegram_id).single();
 
-    let pesanStart = `Halo *${nama}*! 👋\n\nSelamat datang di *Portal Langganan Premium*.`;
+    const menu = tampilkanMenuUtama(nama);
+    let pesanStart = menu.text;
 
     // Jika belum terdaftar sama sekali, beri instruksi via tombol Kode Unik atau /klaim
     if (!data) {
         pesanStart += `\n\n⚠️ _Jika kamu anggota Family Sharing lama, silakan klik tombol *🔑 Kode Unik* di bawah, atau ketik:_ \`/klaim KODE_KAMU\`\n_(Contoh: /klaim HSB123)_`;
     }
 
-    const menu = tampilkanMenuUtama(nama);
     await ctx.reply(pesanStart, menu.options);
 });
 
