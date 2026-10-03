@@ -9,36 +9,31 @@ const coreApi = new midtransClient.CoreApi({
     serverKey: process.env.MIDTRANS_SERVER_KEY
 });
 
-// ============================================
-// --- KONFIGURASI (WAJIB DIISI) ---
-// ============================================
 const CHANNEL_USERNAME = '@FStoreSupport';
 const QRIS_FALLBACK_URL = "https://i.postimg.cc/bJn4G5ms/qris.jpg";
 
 // ============================================
-// --- FUNGSI KIRIM PESAN DENGAN FALLBACK ---
+// --- SAFE SEND (Fallback Kalau Markdown Error) ---
 // ============================================
-// Fungsi ini mencoba kirim dengan Markdown. Kalau gagal, kirim ulang tanpa format.
 const safeSendMessage = async (chatId, pesan) => {
     try {
         await bot.telegram.sendMessage(chatId, pesan, { parse_mode: 'Markdown' });
         return true;
     } catch (err1) {
-        console.log("⚠️ Markdown gagal, coba plain text. Error:", err1.message);
+        console.log("⚠️ Markdown gagal, fallback plain text:", err1.message);
         try {
-            // Hapus karakter Markdown agar pesan tetap terkirim
-            const pesanPolos = pesan.replace(/[*_`\[\]]/g, '');
+            const pesanPolos = pesan.replace(/[*_`\[\]()]/g, '');
             await bot.telegram.sendMessage(chatId, pesanPolos);
             return true;
         } catch (err2) {
-            console.log("❌ Gagal kirim pesan sama sekali:", err2.message);
+            console.log("❌ Gagal kirim pesan:", err2.message);
             return false;
         }
     }
 };
 
 // ============================================
-// --- FUNGSI CEK STATUS JOIN CHANNEL ---
+// --- CEK JOIN CHANNEL ---
 // ============================================
 const isUserJoined = async (ctx) => {
     try {
@@ -50,7 +45,9 @@ const isUserJoined = async (ctx) => {
     }
 };
 
-// --- MENU UTAMA ---
+// ============================================
+// --- MENU ---
+// ============================================
 const tampilkanMenuUtama = (nama) => {
     return {
         text: `👑 *f-store* ✨\nProduk langganan digital premium otomatis.\n\nHalo *${nama}*! 🔥\n\n⬇️ *Pilih menu di bawah buat mulai:*`,
@@ -58,14 +55,13 @@ const tampilkanMenuUtama = (nama) => {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
                 [Markup.button.callback('✦ Perpanjang Gemini Pro', 'bayar_gemini')],
-                [Markup.button.callback('🎨 Canva Edu Pro', 'menu_canva')],
+                [Markup.button.callback('🎨 Perpanjang Canva Pro', 'menu_canva')],
                 [Markup.button.callback('📋 Riwayat & Status', 'cek_status'), Markup.button.callback('🔑 Kode Unik', 'input_kode')]
             ])
         }
     };
 };
 
-// --- PESAN FORCE JOIN ---
 const pesanForceJoin = () => {
     return {
         text: `👋 *Halo! Selamat datang di f-store* ✨\n\nUntuk menggunakan layanan kami, kamu *wajib bergabung* ke Channel Update & Testimoni terlebih dahulu.\n\n📢 *Kenapa harus join?*\n• Lihat bukti transaksi pelanggan lain\n• Dapat info promo & produk terbaru\n• Channel hanya admin yang bisa chat\n\n_Klik tombol di bawah untuk bergabung, lalu tekan Cek Status._`,
@@ -80,113 +76,85 @@ const pesanForceJoin = () => {
 };
 
 // ============================================
-// --- 1. COMMAND /START ---
+// --- /START ---
 // ============================================
 bot.start(async (ctx) => {
     const joined = await isUserJoined(ctx);
-
     if (!joined) {
         const fj = pesanForceJoin();
         return ctx.reply(fj.text, fj.options);
     }
 
-    const telegram_id = ctx.from.id;
-    const nama = ctx.from.first_name;
-    const { data } = await supabase.from('subscriptions').select('*').eq('telegram_id', telegram_id).maybeSingle();
-
-    const menu = tampilkanMenuUtama(nama);
+    const { data } = await supabase.from('subscriptions').select('id').eq('telegram_id', ctx.from.id).limit(1);
+    const menu = tampilkanMenuUtama(ctx.from.first_name);
     let pesanStart = menu.text;
 
-    if (!data) {
-        pesanStart += `\n\n⚠️ _Jika kamu anggota Family Sharing lama, silakan klik tombol *🔑 Kode Unik* di bawah, atau ketik:_ \`/klaim KODE_KAMU\`\n_(Contoh: /klaim HSB123)_`;
+    if (!data || data.length === 0) {
+        pesanStart += `\n\n⚠️ _Jika kamu anggota Family Sharing (Gemini) lama, silakan klik tombol *🔑 Kode Unik* di bawah._`;
     }
 
     await ctx.reply(pesanStart, menu.options);
 });
 
-// --- CEK JOIN ---
+// --- Cek Join ---
 bot.action('cek_join', async (ctx) => {
     const joined = await isUserJoined(ctx);
+    if (!joined) return ctx.answerCbQuery('⚠️ Kamu belum bergabung ke channel. Silakan gabung dulu ya!', { show_alert: true });
 
-    if (!joined) {
-        return ctx.answerCbQuery('⚠️ Kamu belum bergabung ke channel. Silakan gabung dulu ya!', { show_alert: true });
-    }
-
-    try { await ctx.deleteMessage(); } catch (e) { /* abaikan */ }
-
-    const telegram_id = ctx.from.id;
-    const nama = ctx.from.first_name;
-    const { data } = await supabase.from('subscriptions').select('*').eq('telegram_id', telegram_id).maybeSingle();
-
-    const menu = tampilkanMenuUtama(nama);
-    let pesanStart = `🎉 *Verifikasi Berhasil!*\n\n` + menu.text;
-
-    if (!data) {
-        pesanStart += `\n\n⚠️ _Jika kamu anggota Family Sharing lama, silakan klik tombol *🔑 Kode Unik* di bawah._`;
-    }
-
-    await ctx.reply(pesanStart, menu.options);
-});
-
-// --- /klaim ---
-bot.command('klaim', async (ctx) => {
-    const teks = ctx.message.text;
-    const argumen = teks.split(' ');
-
-    if (argumen.length !== 2) {
-        return ctx.reply('⚠️ Format salah. Ketik dengan format:\n`/klaim KODE_DARI_ADMIN`', { parse_mode: 'Markdown' });
-    }
-
-    const kode_klaim = argumen[1].toUpperCase();
-    const telegram_id = ctx.from.id;
-
-    const { data, error } = await supabase.from('subscriptions').select('*').eq('kode_sinkronisasi', kode_klaim).maybeSingle();
-
-    if (error || !data) {
-        return ctx.reply('❌ Kode tidak valid atau tidak ditemukan. Pastikan ketikanmu benar atau hubungi Admin.');
-    }
-
-    if (data.telegram_id) {
-        return ctx.reply('⚠️ Kode ini sudah terpakai dan tertaut dengan akun Telegram lain.');
-    }
-
-    await supabase.from('subscriptions').update({ telegram_id: telegram_id, kode_sinkronisasi: null }).eq('id', data.id);
-
-    ctx.reply(`✅ *Sinkronisasi Berhasil!*\n\nSelamat datang kembali, *${data.nama}*! Akun Telegram kamu telah terhubung dengan layanan *${data.layanan}*.\nKetik /start untuk membuka menu utama.`, { parse_mode: 'Markdown' });
+    try { await ctx.deleteMessage(); } catch (e) {}
+    const menu = tampilkanMenuUtama(ctx.from.first_name);
+    await ctx.reply(`🎉 *Verifikasi Berhasil!*\n\n` + menu.text, menu.options);
 });
 
 // --- Kode Unik ---
 bot.action('input_kode', async (ctx) => {
     await ctx.reply(
         '🔑 *Tautkan Akun*\n\nSilakan _Copy_ dan _Paste_ (Kirim) kode unik yang diberikan oleh Admin secara langsung ke obrolan ini 👇',
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([[Markup.button.callback('🔙 Kembali', 'kembali_menu')]])
-        }
+        { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('🔙 Kembali', 'kembali_menu')]]) }
     );
 });
 
-// --- Deteksi kode via chat ---
+// --- Deteksi Kode via Chat ---
 bot.on('text', async (ctx) => {
     const text = ctx.message.text.trim().toUpperCase();
     if (text.startsWith('/')) return;
 
     if (text.length >= 5 && text.length <= 8) {
-        const { data } = await supabase.from('subscriptions').select('*').eq('kode_sinkronisasi', text).maybeSingle();
-
+        const { data, error } = await supabase.from('subscriptions').select('*').eq('kode_sinkronisasi', text).maybeSingle();
         if (data) {
-            if (data.telegram_id) {
-                return ctx.reply('⚠️ Kode ini sudah terpakai oleh akun Telegram lain.');
-            }
+            if (data.telegram_id) return ctx.reply('⚠️ Kode ini sudah terpakai oleh akun Telegram lain.');
             await supabase.from('subscriptions').update({ telegram_id: ctx.from.id, kode_sinkronisasi: null }).eq('id', data.id);
-            return ctx.reply(`✅ *Sinkronisasi Berhasil!*\n\nSelamat datang kembali, *${data.nama}*! Akun Telegram kamu telah terhubung dengan layanan *${data.layanan}*.\nKetik /start untuk membuka menu utama.`, { parse_mode: 'Markdown' });
+            return ctx.reply(
+                `✅ *Sinkronisasi Berhasil!*\n\nSelamat datang kembali, *${data.nama}*! Akun Telegram kamu telah terhubung dengan layanan *${data.layanan}*.\nKetik /start untuk membuka menu utama.`,
+                { parse_mode: 'Markdown' }
+            );
         }
     }
 });
 
+// ============================================
+// --- PROTEKSI GEMINI (WAJIB KODE UNIK DULU) ---
+// ============================================
+bot.action('bayar_gemini', async (ctx) => {
+    const { data } = await supabase.from('subscriptions')
+        .select('id')
+        .eq('telegram_id', ctx.from.id)
+        .ilike('layanan', '%Gemini%')
+        .limit(1);
+
+    if (!data || data.length === 0) {
+        return ctx.reply(
+            '⚠️ *Akses Ditolak!*\n\nLayanan *Gemini Pro* menggunakan sistem _Family Sharing_ (Stok Terbatas) dan tidak dijual secara publik.\n\nJika kamu sudah memesan ke Admin, silakan klik tombol *🔑 Kode Unik* di menu utama dan masukkan kodenya terlebih dahulu.',
+            { parse_mode: 'Markdown' }
+        );
+    }
+
+    prosesTagihan(ctx, 'Gemini Pro (1 Bulan)', 15000, 'GEMINI1M', 'Gemini');
+});
+
 // --- Menu Canva ---
 bot.action('menu_canva', async (ctx) => {
-    await ctx.editMessageText('🎨 *Pilih durasi Canva Edu Pro:*', {
+    await ctx.editMessageText('🎨 *Pilih durasi perpanjangan Canva Pro:*', {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
             [Markup.button.callback('1 Bulan (Rp5.000)', 'canva_1m'), Markup.button.callback('3 Bulan (Rp13.000)', 'canva_3m')],
@@ -198,16 +166,16 @@ bot.action('menu_canva', async (ctx) => {
 
 bot.action('kembali_menu', async (ctx) => {
     const menu = tampilkanMenuUtama(ctx.from.first_name);
-    try {
-        await ctx.editMessageText(menu.text, menu.options);
-    } catch (error) {
-        try { await ctx.deleteMessage(); } catch (e) { /* abaikan */ }
+    try { await ctx.editMessageText(menu.text, menu.options); } catch (e) {
+        try { await ctx.deleteMessage(); } catch (e) {}
         await ctx.reply(menu.text, menu.options);
     }
 });
 
-// --- Fungsi Tagihan (Midtrans + Fallback) ---
-const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan) => {
+// ============================================
+// --- FUNGSI TAGIHAN (Multi-Produk) ---
+// ============================================
+const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan, kategoriLayanan) => {
     await ctx.editMessageText(`⏳ _Sedang menyiapkan tagihan untuk ${namaLayanan}..._`, { parse_mode: 'Markdown' });
 
     const kodeUnik = Math.floor(Math.random() * 999) + 1;
@@ -215,31 +183,35 @@ const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan) => {
     const telegram_id = ctx.from.id;
     const order_id = `${kodeLayanan}-${telegram_id}-${Date.now()}`;
 
-    const { data } = await supabase.from('subscriptions').select('id').eq('telegram_id', telegram_id).maybeSingle();
-    if (!data) {
+    // Cari baris spesifik berdasarkan kategori (Canva / Gemini)
+    const { data } = await supabase.from('subscriptions')
+        .select('id')
+        .eq('telegram_id', telegram_id)
+        .ilike('layanan', `%${kategoriLayanan}%`)
+        .limit(1);
+
+    if (!data || data.length === 0) {
+        // Hanya Canva yang boleh auto-insert (Gemini sudah di-block di atas)
         await supabase.from('subscriptions').insert([{
             telegram_id: telegram_id,
             nama: ctx.from.first_name,
-            layanan: namaLayanan.split(' ')[0],
+            layanan: kategoriLayanan === 'Canva' ? 'Canva Pro' : 'Gemini Pro',
             status_aktif: false,
             nominal: totalBayar,
             last_order_id: order_id
         }]);
     } else {
-        await supabase.from('subscriptions').update({ last_order_id: order_id, nominal: totalBayar }).eq('telegram_id', telegram_id);
+        await supabase.from('subscriptions').update({ last_order_id: order_id, nominal: totalBayar }).eq('id', data[0].id);
     }
 
     try {
-        let parameter = {
+        const chargeResponse = await coreApi.charge({
             "payment_type": "qris",
             "transaction_details": { "order_id": order_id, "gross_amount": totalBayar }
-        };
-        const chargeResponse = await coreApi.charge(parameter);
-        const qrisUrl = chargeResponse.actions[0].url;
-
+        });
         await ctx.deleteMessage();
         await ctx.replyWithPhoto(
-            { url: qrisUrl },
+            { url: chargeResponse.actions[0].url },
             {
                 caption: `✅ *Tagihan Dibuat! (Otomatis)*\n\n🧾 *Order ID:* \`${order_id}\`\n💻 *Layanan:* ${namaLayanan}\n💰 *Total:* *Rp${totalBayar.toLocaleString('id-ID')}*\n\n_Sistem akan memverifikasi pembayaranmu secara otomatis._`,
                 parse_mode: 'Markdown',
@@ -247,15 +219,12 @@ const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan) => {
             }
         );
     } catch (error) {
-        console.log("Midtrans gagal, beralih ke Fallback QRIS Statis...");
-        console.log("Error detail:", error.message);
-
-        try { await ctx.deleteMessage(); } catch (e) { /* abaikan */ }
-
+        console.log("Midtrans gagal, fallback ke QRIS statis:", error.message);
+        try { await ctx.deleteMessage(); } catch (e) {}
         await ctx.replyWithPhoto(
             { url: QRIS_FALLBACK_URL },
             {
-                caption: `⚠️ _Sistem otomatis sedang maintenance. Mengalihkan ke jalur manual..._\n\n✅ *Tagihan Dibuat!*\n\n🧾 *Order ID:* \`${order_id}\`\n💻 *Layanan:* ${namaLayanan}\n💰 *Total Bayar:* *Rp${totalBayar.toLocaleString('id-ID')}*\n\n⚠️ *PENTING:* Transfer **TEPAT** sejumlah nominal di atas hingga 3 digit terakhir.\n\n_Setelah transfer, COPY Order ID di atas dan berikan ke Admin untuk verifikasi manual._`,
+                caption: `⚠️ _Sistem otomatis maintenance. Jalur manual..._\n\n✅ *Tagihan Dibuat!*\n\n🧾 *Order ID:* \`${order_id}\`\n💻 *Layanan:* ${namaLayanan}\n💰 *Total Bayar:* *Rp${totalBayar.toLocaleString('id-ID')}*\n\n⚠️ Transfer *TEPAT* nominal di atas.\n\n_Setelah transfer, copy Order ID & kirim ke Admin._`,
                 parse_mode: 'Markdown',
                 ...Markup.inlineKeyboard([[Markup.button.callback('❌ Batalkan Pesanan', 'batal_pesanan')]])
             }
@@ -263,11 +232,10 @@ const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan) => {
     }
 };
 
-bot.action('bayar_gemini', (ctx) => prosesTagihan(ctx, 'Gemini Pro (1 Bulan)', 15000, 'GEMINI1M'));
-bot.action('canva_1m', (ctx) => prosesTagihan(ctx, 'Canva Pro (1 Bulan)', 5000, 'CANVA1M'));
-bot.action('canva_3m', (ctx) => prosesTagihan(ctx, 'Canva Pro (3 Bulan)', 13000, 'CANVA3M'));
-bot.action('canva_6m', (ctx) => prosesTagihan(ctx, 'Canva Pro (6 Bulan)', 25000, 'CANVA6M'));
-bot.action('canva_1y', (ctx) => prosesTagihan(ctx, 'Canva Pro (1 Tahun)', 35000, 'CANVA1Y'));
+bot.action('canva_1m', (ctx) => prosesTagihan(ctx, 'Canva Pro (1 Bulan)', 5000, 'CANVA1M', 'Canva'));
+bot.action('canva_3m', (ctx) => prosesTagihan(ctx, 'Canva Pro (3 Bulan)', 13000, 'CANVA3M', 'Canva'));
+bot.action('canva_6m', (ctx) => prosesTagihan(ctx, 'Canva Pro (6 Bulan)', 25000, 'CANVA6M', 'Canva'));
+bot.action('canva_1y', (ctx) => prosesTagihan(ctx, 'Canva Pro (1 Tahun)', 35000, 'CANVA1Y', 'Canva'));
 
 bot.action('batal_pesanan', async (ctx) => {
     await ctx.deleteMessage();
@@ -275,35 +243,43 @@ bot.action('batal_pesanan', async (ctx) => {
     await ctx.reply('🚫 _Pembuatan tagihan telah dibatalkan._', menu.options);
 });
 
-// --- Cek Status ---
+// ============================================
+// --- CEK STATUS (Multi-Produk) ---
+// ============================================
 bot.action('cek_status', async (ctx) => {
-    const telegram_id = ctx.from.id;
-    const { data, error } = await supabase.from('subscriptions').select('*').eq('telegram_id', telegram_id).maybeSingle();
-
+    const { data, error } = await supabase.from('subscriptions').select('*').eq('telegram_id', ctx.from.id);
     const tombolKembali = Markup.inlineKeyboard([[Markup.button.callback('🔙 Kembali', 'kembali_menu')]]);
 
-    if (error || !data) {
-        return ctx.reply(
-            '⚠️ *Data Belum Ditemukan*\nSilakan klik tombol *🔑 Kode Unik* jika kamu punya kode dari Admin, atau beli layanan terlebih dahulu.',
-            { parse_mode: 'Markdown', ...tombolKembali }
-        );
+    if (error || !data || data.length === 0) {
+        return ctx.reply('⚠️ *Data Belum Ditemukan*\nSilakan klik tombol *🔑 Kode Unik* atau beli layanan.', { parse_mode: 'Markdown', ...tombolKembali });
     }
 
-    const statusPesan = data.status_aktif ? "✅ AKTIF" : "❌ BELUM BAYAR / HABIS";
-    const formatTanggal = data.jatuh_tempo
-        ? new Date(data.jatuh_tempo).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
-        : 'Belum ada data pembayaran';
+    let pesan = `📋 *RIWAYAT AKUN KAMU*\n👤 *Nama:* ${data[0].nama}\n━━━━━━━━━━━━━━━━━━\n\n`;
 
-    let teksLinkCanva = '';
-    const isCanva = (data.layanan || '').toLowerCase().includes('canva');
-    if (isCanva && data.status_aktif) {
+    // Ambil link Canva sekali saja kalau ada
+    let linkCanva = '';
+    const adaCanva = data.some(item => (item.layanan || '').toLowerCase().includes('canva') && item.status_aktif);
+    if (adaCanva) {
         const { data: setting } = await supabase.from('settings').select('nilai').eq('nama_pengaturan', 'link_canva').maybeSingle();
-        if (setting && setting.nilai) {
-            teksLinkCanva = `\n\n🔗 *Link Akses Canva Kamu:*\n${setting.nilai}`;
-        }
+        if (setting?.nilai) linkCanva = setting.nilai;
     }
 
-    const pesan = `📋 *RIWAYAT AKUN KAMU*\n\n👤 *Nama:* ${data.nama}\n💻 *Layanan:* ${data.layanan || '-'}\n🔖 *Status:* ${statusPesan}\n⏳ *Berlaku Sampai:* ${formatTanggal}${teksLinkCanva}`;
+    // Loop semua produk
+    data.forEach(item => {
+        const statusPesan = item.status_aktif ? "✅ AKTIF" : "❌ BELUM BAYAR / HABIS";
+        const formatTanggal = item.jatuh_tempo
+            ? new Date(item.jatuh_tempo).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
+            : '-';
+        pesan += `💻 *${item.layanan}*\n🔖 Status: ${statusPesan}\n⏳ Tempo: ${formatTanggal}\n\n`;
+
+        // Kalau produknya Canva & aktif, kasih link
+        if ((item.layanan || '').toLowerCase().includes('canva') && item.status_aktif && linkCanva) {
+            pesan += `🔗 Link: ${linkCanva}\n\n`;
+        }
+    });
+
+    pesan += `━━━━━━━━━━━━━━━━━━\n_Semua status di atas update otomatis._`;
+
     await ctx.reply(pesan, { parse_mode: 'Markdown', ...tombolKembali });
 });
 
@@ -311,14 +287,10 @@ bot.action('cek_status', async (ctx) => {
 // --- WEBHOOK ---
 // ============================================
 export default async function handler(req, res) {
-    // CORS
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-    res.setHeader(
-        'Access-Control-Allow-Headers',
-        'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
-    );
+    res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
 
     if (req.method === 'OPTIONS') return res.status(200).end();
 
@@ -327,16 +299,15 @@ export default async function handler(req, res) {
         if (req.body.message || req.body.callback_query) {
             try {
                 await bot.handleUpdate(req.body);
-                return res.status(200).send('OK');
             } catch (e) {
                 console.log("Error handleUpdate:", e.message);
-                return res.status(200).send('OK');
             }
+            return res.status(200).send('OK');
         }
 
         // Update dari Midtrans / Dashboard Admin
         if (req.body.transaction_status) {
-            console.log("🔔 Webhook diterima:", JSON.stringify(req.body));
+            console.log("🔔 Webhook:", JSON.stringify(req.body));
 
             const status = req.body.transaction_status;
             const order_id = req.body.order_id;
@@ -346,68 +317,64 @@ export default async function handler(req, res) {
                     const parts = order_id.split('-');
                     const kodeLayanan = parts[0];
                     const telegram_id = parts[1];
+                    const kategori = kodeLayanan.includes('CANVA') ? 'Canva' : 'Gemini';
 
-                    console.log(`📦 Proses: kode=${kodeLayanan}, telegram_id=${telegram_id}`);
+                    console.log(`📦 Proses: kode=${kodeLayanan}, telegram_id=${telegram_id}, kategori=${kategori}`);
 
+                    // Hitung durasi & nama layanan berdasarkan kode
                     let tambahanHari = 30;
-                    if (kodeLayanan === 'CANVA3M') tambahanHari = 90;
-                    if (kodeLayanan === 'CANVA6M') tambahanHari = 180;
-                    if (kodeLayanan === 'CANVA1Y') tambahanHari = 365;
+                    let namaLayanan = 'Gemini Pro (1 Bulan)';
 
-                    // Ambil data user SEBELUM update (pakai maybeSingle agar tidak error)
-                    const { data: user, error: userErr } = await supabase
-                        .from('subscriptions')
-                        .select('nama, jatuh_tempo, nominal')
+                    if (kodeLayanan === 'CANVA1M') { tambahanHari = 30; namaLayanan = 'Canva Pro (1 Bulan)'; }
+                    if (kodeLayanan === 'CANVA3M') { tambahanHari = 90; namaLayanan = 'Canva Pro (3 Bulan)'; }
+                    if (kodeLayanan === 'CANVA6M') { tambahanHari = 180; namaLayanan = 'Canva Pro (6 Bulan)'; }
+                    if (kodeLayanan === 'CANVA1Y') { tambahanHari = 365; namaLayanan = 'Canva Pro (1 Tahun)'; }
+
+                    // Cari baris spesifik (Canva atau Gemini)
+                    const { data: userList } = await supabase.from('subscriptions')
+                        .select('id, nama, jatuh_tempo, nominal, layanan')
                         .eq('telegram_id', parseInt(telegram_id))
-                        .maybeSingle();
+                        .ilike('layanan', `%${kategori}%`)
+                        .order('id', { ascending: false })
+                        .limit(1);
 
-                    if (userErr) console.log("⚠️ Error ambil user:", userErr.message);
-                    if (!user) console.log(`⚠️ User dengan telegram_id ${telegram_id} tidak ditemukan di database`);
+                    if (!userList || userList.length === 0) {
+                        console.log(`⚠️ User ${telegram_id} tidak punya row ${kategori}`);
+                        return res.status(200).send('User not found');
+                    }
 
-                    // Hitung tanggal
+                    const user = userList[0];
+
+                    // Hitung tanggal baru
                     let tanggalDasar = new Date();
-                    if (user?.jatuh_tempo && new Date(user.jatuh_tempo) > tanggalDasar) {
+                    if (user.jatuh_tempo && new Date(user.jatuh_tempo) > tanggalDasar) {
                         tanggalDasar = new Date(user.jatuh_tempo);
                     }
                     tanggalDasar.setDate(tanggalDasar.getDate() + tambahanHari);
                     const newJatuhTempo = tanggalDasar.toISOString().split('T')[0];
 
                     // Update database
-                    const { error: updateErr } = await supabase
-                        .from('subscriptions')
+                    await supabase.from('subscriptions')
                         .update({ status_aktif: true, jatuh_tempo: newJatuhTempo })
-                        .eq('telegram_id', parseInt(telegram_id));
+                        .eq('id', user.id);
 
-                    if (updateErr) console.log("❌ Error update database:", updateErr.message);
+                    console.log(`✅ DB updated untuk ${user.id}, jatuh tempo: ${newJatuhTempo}`);
 
-                    // Nama layanan
-                    let namaLayanan = 'Gemini Pro (1 Bulan)';
-                    let isCanva = false;
-
-                    if (kodeLayanan === 'CANVA1M') { namaLayanan = 'Canva Pro (1 Bulan)'; isCanva = true; }
-                    if (kodeLayanan === 'CANVA3M') { namaLayanan = 'Canva Pro (3 Bulan)'; isCanva = true; }
-                    if (kodeLayanan === 'CANVA6M') { namaLayanan = 'Canva Pro (6 Bulan)'; isCanva = true; }
-                    if (kodeLayanan === 'CANVA1Y') { namaLayanan = 'Canva Pro (1 Tahun)'; isCanva = true; }
-
-                    const totalBayar = user?.nominal ? Number(user.nominal).toLocaleString('id-ID') : '-';
+                    // Siapkan teks notifikasi
+                    const totalBayar = user.nominal ? Number(user.nominal).toLocaleString('id-ID') : '-';
                     const tanggalFormatted = tanggalDasar.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
 
-                    // Ambil link Canva
+                    // Ambil link Canva kalau kategori Canva
                     let teksLinkCanva = '';
-                    if (isCanva) {
-                        const { data: setting } = await supabase
-                            .from('settings')
-                            .select('nilai')
-                            .eq('nama_pengaturan', 'link_canva')
-                            .maybeSingle();
-
-                        if (setting && setting.nilai) {
-                            teksLinkCanva = `\n\n🎨 *Akses Canva Pro Kamu:*\n${setting.nilai}\n_(Klik link di atas untuk bergabung ke Tim)_`;
+                    if (kategori === 'Canva') {
+                        const { data: setting } = await supabase.from('settings').select('nilai').eq('nama_pengaturan', 'link_canva').maybeSingle();
+                        if (setting?.nilai) {
+                            teksLinkCanva = `\n\n🎨 *Akses Canva Pro Kamu:*\n${setting.nilai}\n_(Klik link untuk bergabung ke Tim)_`;
                         }
                     }
 
-                    // Susun pesan sukses
-                    const pesanSukses = `🎉 *PEMBAYARAN BERHASIL!*\n\n` +
+                    const pesanSukses =
+                        `🎉 *PEMBAYARAN BERHASIL!*\n\n` +
                         `Terima kasih sudah berlangganan di *f-store* ✨\n\n` +
                         `━━━━━━━━━━━━━━━━━━\n` +
                         `🧾 *Detail Pesanan*\n` +
@@ -421,41 +388,38 @@ export default async function handler(req, res) {
                         `Cek status kapan saja lewat tombol *📋 Riwayat & Status* di menu utama.\n\n` +
                         `_Ada kendala? Hubungi admin ya!_ 🙏`;
 
-                    // Kirim ke user (dengan fallback otomatis)
+                    // Kirim ke user (dengan fallback)
                     console.log(`📨 Kirim pesan sukses ke ${telegram_id}...`);
                     const sent = await safeSendMessage(parseInt(telegram_id), pesanSukses);
-                    if (sent) console.log(`✅ Pesan sukses terkirim ke ${telegram_id}`);
-                    else console.log(`❌ Pesan sukses GAGAL terkirim ke ${telegram_id}`);
+                    console.log(sent ? `✅ Terkirim ke ${telegram_id}` : `❌ GAGAL ke ${telegram_id}`);
 
                     // Broadcast ke channel
-                    if (user) {
-                        const idStr = telegram_id.toString();
-                        const maskedId = idStr.substring(0, 3) + '•••' + idStr.substring(idStr.length - 3);
-                        const amount = user.nominal ? Number(user.nominal).toLocaleString('id-ID') : '0';
-                        const now = new Date();
-                        const dateStr = now.toLocaleDateString('en-GB', { timeZone: 'Asia/Jakarta' });
-                        const timeStr = now.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour12: false }).replace(/:/g, '.');
+                    const idStr = telegram_id.toString();
+                    const maskedId = idStr.substring(0, 3) + '•••' + idStr.substring(idStr.length - 3);
+                    const amount = user.nominal ? Number(user.nominal).toLocaleString('id-ID') : '0';
+                    const now = new Date();
+                    const dateStr = now.toLocaleDateString('en-GB', { timeZone: 'Asia/Jakarta' });
+                    const timeStr = now.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour12: false }).replace(/:/g, '.');
 
-                        const broadcastPesan = `📣 *New Purchase!*\n\n` +
-                            `ℹ️ *ID:* ${maskedId}\n` +
-                            `🛍️ *Product:* ${namaLayanan}\n` +
-                            `✅ *Quantity:* 1\n` +
-                            `💵 *Amount:* Rp ${amount}\n` +
-                            `⏳ *Time:* ${dateStr}, ${timeStr}`;
+                    const broadcastPesan =
+                        `📣 *New Purchase!*\n\n` +
+                        `ℹ️ *ID:* ${maskedId}\n` +
+                        `🛍️ *Product:* ${namaLayanan}\n` +
+                        `✅ *Quantity:* 1\n` +
+                        `💵 *Amount:* Rp ${amount}\n` +
+                        `⏳ *Time:* ${dateStr}, ${timeStr}`;
 
-                        try {
-                            await bot.telegram.sendMessage(CHANNEL_USERNAME, broadcastPesan, { parse_mode: 'Markdown' });
-                            console.log(`✅ Broadcast ke channel berhasil`);
-                        } catch (e) {
-                            console.log("❌ Gagal broadcast ke channel:", e.message);
-                        }
+                    try {
+                        await bot.telegram.sendMessage(CHANNEL_USERNAME, broadcastPesan, { parse_mode: 'Markdown' });
+                        console.log(`✅ Broadcast ke channel berhasil`);
+                    } catch (e) {
+                        console.log("❌ Gagal broadcast:", e.message);
                     }
                 } catch (fatalErr) {
-                    console.log("❌❌ ERROR FATAL di webhook:", fatalErr.message);
+                    console.log("❌❌ FATAL ERROR:", fatalErr.message);
                     console.log(fatalErr.stack);
                 }
             }
-
             return res.status(200).send('OK');
         }
     }
