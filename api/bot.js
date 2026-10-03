@@ -290,9 +290,7 @@ bot.action('cek_status', async (ctx) => {
 // --- WEBHOOK, AUTO-VERIFY, & BROADCAST CHANNEL ---
 // ============================================
 export default async function handler(req, res) {
-    // ==========================================
     // 1. IZIN CORS (WAJIB AGAR DASHBOARD BISA FETCH)
-    // ==========================================
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -375,7 +373,8 @@ export default async function handler(req, res) {
                 // ============================================
                 if (user) {
                     const idStr = telegram_id.toString();
-                    const maskedId = idStr.substring(0, 3) + '***' + idStr.substring(idStr.length - 3);
+                    // PERBAIKAN: gunakan bullet tebal (•••) bukan (***) agar tidak bentrok dengan Markdown Telegram
+                    const maskedId = idStr.substring(0, 3) + '•••' + idStr.substring(idStr.length - 3);
                     const amount = user.nominal ? user.nominal.toLocaleString('id-ID') : '0';
                     const now = new Date();
                     const dateStr = now.toLocaleDateString('en-GB', { timeZone: 'Asia/Jakarta' });
