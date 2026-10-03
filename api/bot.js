@@ -385,6 +385,7 @@ export default async function handler(req, res) {
     if (req.method === 'OPTIONS') return res.status(200).end();
 
     if (req.method === 'POST') {
+        // Update dari Telegram
         if (req.body.message || req.body.callback_query) {
             try {
                 await bot.handleUpdate(req.body);
@@ -394,19 +395,68 @@ export default async function handler(req, res) {
             return res.status(200).send('OK');
         }
 
+        // Update dari Dashboard Admin atau Midtrans
         if (req.body.transaction_status) {
-            console.log("🔔 Webhook:", JSON.stringify(req.body));
+            console.log("🔔 Webhook MASUK:", JSON.stringify(req.body));
 
             const status = req.body.transaction_status;
             const order_id = req.body.order_id;
 
             if (status === 'settlement' || status === 'capture') {
                 try {
+                    if (!order_id) {
+                        console.log("❌ order_id kosong!");
+                        return res.status(200).send('No order_id');
+                    }
+
                     const parts = order_id.split('-');
                     const kodeLayanan = parts[0];
                     const telegram_id = parts[1];
                     const kategori = kodeLayanan.includes('CANVA') ? 'Canva' : 'Gemini';
 
+                    console.log(`📦 Parsed: kode=${kodeLayanan}, telegram_id=${telegram_id}, kategori=${kategori}`);
+
+                    // ============================================
+                    // FIX: SEARCH BY last_order_id DULU (paling akurat)
+                    // ============================================
+                    let user = null;
+
+                    // PRIMARY: Cari by last_order_id
+                    const { data: byOrder } = await supabase
+                        .from('subscriptions')
+                        .select('id, nama, jatuh_tempo, nominal, layanan')
+                        .eq('last_order_id', order_id)
+                        .limit(1);
+
+                    if (byOrder && byOrder.length > 0) {
+                        user = byOrder[0];
+                        console.log(`✅ User ditemukan by last_order_id: id=${user.id}, layanan=${user.layanan}`);
+                    } else {
+                        console.log(`⚠️ Tidak ditemukan by last_order_id. Coba fallback ke telegram_id + kategori...`);
+
+                        // FALLBACK: Cari by telegram_id + ilike layanan
+                        const { data: byTg } = await supabase
+                            .from('subscriptions')
+                            .select('id, nama, jatuh_tempo, nominal, layanan')
+                            .eq('telegram_id', parseInt(telegram_id))
+                            .ilike('layanan', `%${kategori}%`)
+                            .order('id', { ascending: false })
+                            .limit(1);
+
+                        if (byTg && byTg.length > 0) {
+                            user = byTg[0];
+                            console.log(`✅ User ditemukan by telegram_id + kategori: id=${user.id}`);
+                        }
+                    }
+
+                    if (!user) {
+                        console.log(`❌ USER TIDAK DITEMUKAN! order_id=${order_id}, telegram_id=${telegram_id}, kategori=${kategori}`);
+                        return res.status(200).send('User not found');
+                    }
+
+                    // ============================================
+                    // Hitung durasi & nama layanan
+                    // ============================================
                     let tambahanHari = 30;
                     let namaLayanan = 'Gemini Pro (1 Bulan)';
 
@@ -415,20 +465,7 @@ export default async function handler(req, res) {
                     if (kodeLayanan === 'CANVA6M') { tambahanHari = 180; namaLayanan = 'Canva Pro (6 Bulan)'; }
                     if (kodeLayanan === 'CANVA1Y') { tambahanHari = 365; namaLayanan = 'Canva Pro (1 Tahun)'; }
 
-                    const { data: userList } = await supabase.from('subscriptions')
-                        .select('id, nama, jatuh_tempo, nominal, layanan')
-                        .eq('telegram_id', parseInt(telegram_id))
-                        .ilike('layanan', `%${kategori}%`)
-                        .order('id', { ascending: false })
-                        .limit(1);
-
-                    if (!userList || userList.length === 0) {
-                        console.log(`⚠️ User ${telegram_id} tidak punya row ${kategori}`);
-                        return res.status(200).send('User not found');
-                    }
-
-                    const user = userList[0];
-
+                    // Hitung tanggal
                     let tanggalDasar = new Date();
                     if (user.jatuh_tempo && new Date(user.jatuh_tempo) > tanggalDasar) {
                         tanggalDasar = new Date(user.jatuh_tempo);
@@ -436,16 +473,31 @@ export default async function handler(req, res) {
                     tanggalDasar.setDate(tanggalDasar.getDate() + tambahanHari);
                     const newJatuhTempo = tanggalDasar.toISOString().split('T')[0];
 
-                    await supabase.from('subscriptions')
+                    // Update database
+                    const { error: updateErr } = await supabase
+                        .from('subscriptions')
                         .update({ status_aktif: true, jatuh_tempo: newJatuhTempo })
                         .eq('id', user.id);
 
+                    if (updateErr) {
+                        console.log("❌ Update error:", updateErr.message);
+                    } else {
+                        console.log(`✅ DB updated untuk user id=${user.id}, jatuh tempo=${newJatuhTempo}`);
+                    }
+
+                    // ============================================
+                    // Kirim notifikasi ke user
+                    // ============================================
                     const totalBayar = user.nominal ? Number(user.nominal).toLocaleString('id-ID') : '-';
                     const tanggalFormatted = tanggalDasar.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
 
                     let teksLinkCanva = '';
                     if (kategori === 'Canva') {
-                        const { data: setting } = await supabase.from('settings').select('nilai').eq('nama_pengaturan', 'link_canva').maybeSingle();
+                        const { data: setting } = await supabase
+                            .from('settings')
+                            .select('nilai')
+                            .eq('nama_pengaturan', 'link_canva')
+                            .maybeSingle();
                         if (setting?.nilai) {
                             teksLinkCanva = `\n\n🎨 *Akses Canva Pro Kamu:*\n${setting.nilai}\n_(Klik link untuk bergabung ke Tim)_`;
                         }
@@ -466,7 +518,9 @@ export default async function handler(req, res) {
                         `Cek status kapan saja lewat tombol *📋 Riwayat & Status* di menu utama.\n\n` +
                         `_Ada kendala? Hubungi admin ya!_ 🙏`;
 
-                    await safeSendMessage(parseInt(telegram_id), pesanSukses);
+                    console.log(`📨 Kirim pesan sukses ke telegram_id=${telegram_id}...`);
+                    const sent = await safeSendMessage(parseInt(telegram_id), pesanSukses);
+                    console.log(sent ? `✅ Terkirim ke ${telegram_id}` : `❌ GAGAL ke ${telegram_id}`);
 
                     // Broadcast ke channel
                     const idStr = telegram_id.toString();
@@ -486,11 +540,13 @@ export default async function handler(req, res) {
 
                     try {
                         await bot.telegram.sendMessage(CHANNEL_USERNAME, broadcastPesan, { parse_mode: 'Markdown' });
+                        console.log(`✅ Broadcast ke channel berhasil`);
                     } catch (e) {
                         console.log("❌ Gagal broadcast:", e.message);
                     }
                 } catch (fatalErr) {
                     console.log("❌❌ FATAL ERROR:", fatalErr.message);
+                    console.log(fatalErr.stack);
                 }
             }
             return res.status(200).send('OK');
