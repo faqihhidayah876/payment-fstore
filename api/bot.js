@@ -290,6 +290,23 @@ bot.action('cek_status', async (ctx) => {
 // --- WEBHOOK, AUTO-VERIFY, & BROADCAST CHANNEL ---
 // ============================================
 export default async function handler(req, res) {
+    // ==========================================
+    // 1. IZIN CORS (WAJIB AGAR DASHBOARD BISA FETCH)
+    // ==========================================
+    res.setHeader('Access-Control-Allow-Credentials', true);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+    res.setHeader(
+        'Access-Control-Allow-Headers',
+        'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
+    );
+
+    // 2. TANGKAP REQUEST PREFLIGHT 'OPTIONS' DARI BROWSER
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
+
+    // 3. LOGIKA UTAMA BOT
     if (req.method === 'POST') {
         if (req.body.message || req.body.callback_query) {
             await bot.handleUpdate(req.body);
@@ -324,7 +341,7 @@ export default async function handler(req, res) {
                     .eq('telegram_id', parseInt(telegram_id));
 
                 // ============================================
-                // 1. NOTIFIKASI KE USER (PESAN SUKSES BEAUTIFUL)
+                // NOTIFIKASI KE USER (PESAN SUKSES BEAUTIFUL)
                 // ============================================
                 let namaLayanan = 'Gemini Pro (1 Bulan)';
                 if (kodeLayanan === 'CANVA1M') namaLayanan = 'Canva Pro (1 Bulan)';
@@ -354,14 +371,12 @@ export default async function handler(req, res) {
                 } catch (e) { console.log("Gagal kirim notif ke user:", e.message); }
 
                 // ============================================
-                // 2. BROADCAST KE CHANNEL (AUTO-ORDER STYLE)
+                // BROADCAST KE CHANNEL (AUTO-ORDER STYLE)
                 // ============================================
                 if (user) {
                     const idStr = telegram_id.toString();
                     const maskedId = idStr.substring(0, 3) + '***' + idStr.substring(idStr.length - 3);
-
                     const amount = user.nominal ? user.nominal.toLocaleString('id-ID') : '0';
-
                     const now = new Date();
                     const dateStr = now.toLocaleDateString('en-GB', { timeZone: 'Asia/Jakarta' });
                     const timeStr = now.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour12: false }).replace(/:/g, '.');
