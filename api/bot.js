@@ -282,8 +282,18 @@ bot.action('cek_status', async (ctx) => {
         ? new Date(data.jatuh_tempo).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
         : 'Belum ada data pembayaran';
 
-    const pesan = `📋 *RIWAYAT AKUN KAMU*\n\n👤 *Nama:* ${data.nama}\n💻 *Layanan:* ${data.layanan || '-'}\n🔖 *Status:* ${statusPesan}\n⏳ *Berlaku Sampai:* ${formatTanggal}`;
-    await ctx.reply(pesan, { parse_mode: 'Markdown', ...tombolKembali });
+    // Tampilkan link Canva juga kalau layanannya Canva & sudah aktif
+    let teksLinkCanva = '';
+    const isCanva = (data.layanan || '').toLowerCase().includes('canva');
+    if (isCanva && data.status_aktif) {
+        const { data: setting } = await supabase.from('settings').select('nilai').eq('nama_pengaturan', 'link_canva').single();
+        if (setting && setting.nilai) {
+            teksLinkCanva = `\n\n🔗 *Link Akses Canva Kamu:*\n${setting.nilai}`;
+        }
+    }
+
+    const pesan = `📋 *RIWAYAT AKUN KAMU*\n\n👤 *Nama:* ${data.nama}\n💻 *Layanan:* ${data.layanan || '-'}\n🔖 *Status:* ${statusPesan}\n⏳ *Berlaku Sampai:* ${formatTanggal}${teksLinkCanva}`;
+    await ctx.reply(pesan, { parse_mode: 'Markdown', ...tombolKembali, disable_web_page_preview: true });
 });
 
 // ============================================
@@ -339,16 +349,27 @@ export default async function handler(req, res) {
                     .eq('telegram_id', parseInt(telegram_id));
 
                 // ============================================
-                // NOTIFIKASI KE USER (PESAN SUKSES BEAUTIFUL)
+                // 1. NOTIFIKASI KE USER (PESAN SUKSES BEAUTIFUL)
                 // ============================================
                 let namaLayanan = 'Gemini Pro (1 Bulan)';
-                if (kodeLayanan === 'CANVA1M') namaLayanan = 'Canva Pro (1 Bulan)';
-                if (kodeLayanan === 'CANVA3M') namaLayanan = 'Canva Pro (3 Bulan)';
-                if (kodeLayanan === 'CANVA6M') namaLayanan = 'Canva Pro (6 Bulan)';
-                if (kodeLayanan === 'CANVA1Y') namaLayanan = 'Canva Pro (1 Tahun)';
+                let isCanva = false;
+
+                if (kodeLayanan === 'CANVA1M') { namaLayanan = 'Canva Pro (1 Bulan)'; isCanva = true; }
+                if (kodeLayanan === 'CANVA3M') { namaLayanan = 'Canva Pro (3 Bulan)'; isCanva = true; }
+                if (kodeLayanan === 'CANVA6M') { namaLayanan = 'Canva Pro (6 Bulan)'; isCanva = true; }
+                if (kodeLayanan === 'CANVA1Y') { namaLayanan = 'Canva Pro (1 Tahun)'; isCanva = true; }
 
                 const totalBayar = user?.nominal ? user.nominal.toLocaleString('id-ID') : '-';
                 const tanggalFormatted = tanggalDasar.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+
+                // Ambil link Canva dari tabel 'settings' jika layanannya adalah Canva
+                let teksLinkCanva = '';
+                if (isCanva) {
+                    const { data: setting } = await supabase.from('settings').select('nilai').eq('nama_pengaturan', 'link_canva').single();
+                    if (setting && setting.nilai) {
+                        teksLinkCanva = `\n\n🎨 *Akses Canva Pro Kamu:*\n${setting.nilai}\n_(Silakan klik link di atas untuk bergabung ke dalam Tim)_`;
+                    }
+                }
 
                 const pesanSukses = `🎉 *PEMBAYARAN BERHASIL!*\n\n` +
                     `Terima kasih sudah berlangganan di *f-store* ✨\n\n` +
@@ -360,20 +381,20 @@ export default async function handler(req, res) {
                     `💰 Total    : Rp ${totalBayar}\n` +
                     `📅 Aktif s/d: *${tanggalFormatted}*\n` +
                     `━━━━━━━━━━━━━━━━━━\n\n` +
-                    `✅ Akses kamu sudah *OTOMATIS AKTIF*.\n` +
+                    `✅ Akses kamu sudah *OTOMATIS AKTIF*.${teksLinkCanva}\n\n` +
                     `Cek status kapan saja lewat tombol *📋 Riwayat & Status* di menu utama.\n\n` +
                     `_Ada kendala? Hubungi admin ya!_ 🙏`;
 
                 try {
-                    await bot.telegram.sendMessage(telegram_id, pesanSukses, { parse_mode: 'Markdown' });
+                    await bot.telegram.sendMessage(telegram_id, pesanSukses, { parse_mode: 'Markdown', disable_web_page_preview: true });
                 } catch (e) { console.log("Gagal kirim notif ke user:", e.message); }
 
                 // ============================================
-                // BROADCAST KE CHANNEL (AUTO-ORDER STYLE)
+                // 2. BROADCAST KE CHANNEL (AUTO-ORDER STYLE)
                 // ============================================
                 if (user) {
                     const idStr = telegram_id.toString();
-                    // PERBAIKAN: gunakan bullet tebal (•••) bukan (***) agar tidak bentrok dengan Markdown Telegram
+                    // Gunakan bullet tebal (•••) bukan (***) agar tidak bentrok dengan Markdown Telegram
                     const maskedId = idStr.substring(0, 3) + '•••' + idStr.substring(idStr.length - 3);
                     const amount = user.nominal ? user.nominal.toLocaleString('id-ID') : '0';
                     const now = new Date();
