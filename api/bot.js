@@ -58,7 +58,7 @@ const tampilkanMenuUtama = (nama) => {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
                 [Markup.button.callback('✦ Perpanjang Gemini Pro', 'bayar_gemini')],
-                [Markup.button.callback('🎨 Perpanjang Canva Pro', 'menu_canva')],
+                [Markup.button.callback('🎨 Canva Edu Pro', 'menu_canva')],
                 [Markup.button.callback('📋 Riwayat & Status', 'cek_status'), Markup.button.callback('🔑 Kode Unik', 'input_kode')]
             ])
         }
