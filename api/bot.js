@@ -73,7 +73,13 @@ bot.command('klaim', async (ctx) => {
 
 // --- TOMBOL KODE UNIK (Klik tombol lalu kirim kode via chat) ---
 bot.action('input_kode', async (ctx) => {
-    await ctx.reply('🔑 *Tautkan Akun*\n\nSilakan _Copy_ dan _Paste_ (Kirim) kode unik yang diberikan oleh Admin secara langsung ke obrolan ini 👇', { parse_mode: 'Markdown' });
+    await ctx.reply(
+        '🔑 *Tautkan Akun*\n\nSilakan _Copy_ dan _Paste_ (Kirim) kode unik yang diberikan oleh Admin secara langsung ke obrolan ini 👇',
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('🔙 Kembali', 'kembali_menu')]])
+        }
+    );
 });
 
 // --- DETEKSI KODE UNIK VIA CHAT BIASA ---
@@ -111,9 +117,18 @@ bot.action('menu_canva', async (ctx) => {
     });
 });
 
+// --- KEMBALI KE MENU UTAMA (Robust: handle edit & reply) ---
 bot.action('kembali_menu', async (ctx) => {
     const menu = tampilkanMenuUtama(ctx.from.first_name);
-    await ctx.editMessageText(menu.text, menu.options);
+    try {
+        await ctx.editMessageText(menu.text, menu.options);
+    } catch (error) {
+        // Fallback jika pesan tidak bisa diedit (misal pesan lama atau pesan foto)
+        try {
+            await ctx.deleteMessage();
+        } catch (e) { /* abaikan */ }
+        await ctx.reply(menu.text, menu.options);
+    }
 });
 
 // --- FUNGSI GENERATE QRIS ---
@@ -179,8 +194,17 @@ bot.action('cek_status', async (ctx) => {
     const telegram_id = ctx.from.id;
     const { data, error } = await supabase.from('subscriptions').select('*').eq('telegram_id', telegram_id).single();
 
+    // Tombol kembali untuk kedua skenario (error & sukses)
+    const tombolKembali = Markup.inlineKeyboard([[Markup.button.callback('🔙 Kembali', 'kembali_menu')]]);
+
     if (error || !data) {
-        return ctx.reply('⚠️ *Data Belum Ditemukan*\nSilakan klik tombol *🔑 Kode Unik* jika kamu punya kode dari Admin, atau beli layanan terlebih dahulu.', { parse_mode: 'Markdown' });
+        return ctx.reply(
+            '⚠️ *Data Belum Ditemukan*\nSilakan klik tombol *🔑 Kode Unik* jika kamu punya kode dari Admin, atau beli layanan terlebih dahulu.',
+            {
+                parse_mode: 'Markdown',
+                ...tombolKembali
+            }
+        );
     }
 
     const statusPesan = data.status_aktif ? "✅ AKTIF" : "❌ BELUM BAYAR / HABIS";
@@ -191,7 +215,10 @@ bot.action('cek_status', async (ctx) => {
         : 'Belum ada data pembayaran';
 
     const pesan = `📋 *RIWAYAT AKUN KAMU*\n\n👤 *Nama:* ${data.nama}\n💻 *Layanan:* ${data.layanan || '-'}\n🔖 *Status:* ${statusPesan}\n⏳ *Berlaku Sampai:* ${formatTanggal}`;
-    await ctx.reply(pesan, { parse_mode: 'Markdown' });
+    await ctx.reply(pesan, {
+        parse_mode: 'Markdown',
+        ...tombolKembali
+    });
 });
 
 // --- WEBHOOK & LOGIKA PENAMBAHAN HARI ---
