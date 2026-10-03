@@ -184,17 +184,14 @@ bot.action('kembali_menu', async (ctx) => {
 });
 
 // ============================================
-// --- FUNGSI TAGIHAN (FALLBACK YANG BERJALAN) ---
+// --- FUNGSI TAGIHAN (DENGAN PROTEKSI DATABASE) ---
 // ============================================
 const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan, kategoriLayanan) => {
     console.log(`\n💳 prosesTagihan: ${namaLayanan} | User: ${ctx.from.id}`);
 
-    // Edit pesan
     try {
         await ctx.editMessageText(`⏳ _Sedang menyiapkan tagihan untuk ${namaLayanan}..._`, { parse_mode: 'Markdown' });
-    } catch (e) {
-        console.log("⚠️ Gagal editMessageText:", e.message);
-    }
+    } catch (e) {}
 
     const kodeUnik = Math.floor(Math.random() * 999) + 1;
     const totalBayar = hargaAsli + kodeUnik;
@@ -202,17 +199,20 @@ const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan, kategoriL
     const order_id = `${kodeLayanan}-${telegram_id}-${Date.now()}`;
 
     // ============================================
-    // STEP 1: Simpan order_id (TIDAK PAKAI TIMEOUT WRAPPER)
+    // STEP 1: Simpan order_id (DENGAN PROTEKSI ERROR SUPABASE)
     // ============================================
     try {
-        const { data } = await supabase.from('subscriptions')
+        const { data, error: selectErr } = await supabase.from('subscriptions')
             .select('id')
             .eq('telegram_id', telegram_id)
             .ilike('layanan', `%${kategoriLayanan}%`)
             .limit(1);
 
+        if (selectErr) throw selectErr;
+
         if (!data || data.length === 0) {
-            await supabase.from('subscriptions').insert([{
+            // Insert baris baru untuk produk yang belum dimiliki
+            const { error: insertErr } = await supabase.from('subscriptions').insert([{
                 telegram_id: telegram_id,
                 nama: ctx.from.first_name,
                 layanan: kategoriLayanan === 'Canva' ? 'Canva Pro' : 'Gemini Pro',
@@ -220,25 +220,37 @@ const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan, kategoriL
                 nominal: totalBayar,
                 last_order_id: order_id
             }]);
+            
+            if (insertErr) {
+                console.log("❌ SUPABASE INSERT ERROR:", insertErr.message);
+                throw new Error("Gagal menyimpan ke database (Cek constraint UNIQUE).");
+            }
         } else {
-            await supabase.from('subscriptions')
+            // Update baris produk yang sudah ada (Perpanjangan)
+            const { error: updateErr } = await supabase.from('subscriptions')
                 .update({ last_order_id: order_id, nominal: totalBayar })
                 .eq('id', data[0].id);
+            
+            if (updateErr) {
+                console.log("❌ SUPABASE UPDATE ERROR:", updateErr.message);
+                throw new Error("Gagal mengupdate data pesanan di database.");
+            }
         }
-        console.log("✅ Order disimpan ke database");
+        console.log("✅ Order berhasil diamankan ke database");
     } catch (dbErr) {
-        console.log("⚠️ Database error (lanjut aja):", dbErr.message);
+        console.log("⚠️ Menghentikan proses karena DB Error:", dbErr.message);
+        try { await ctx.deleteMessage(); } catch (e) {}
+        return ctx.reply('❌ Sistem sedang sibuk. Gagal menyimpan sesi pesanan, silakan ulangi beberapa saat lagi atau hubungi Admin.');
     }
 
     // ============================================
-    // STEP 2: Midtrans dengan timeout manual (Promise.race)
+    // STEP 2: Midtrans dengan timeout manual 
     // ============================================
     let qrisUrl = null;
     let midtransSuccess = false;
 
     try {
         console.log("🔄 Memanggil Midtrans...");
-
         const midtransPromise = coreApi.charge({
             "payment_type": "qris",
             "transaction_details": { "order_id": order_id, "gross_amount": totalBayar }
@@ -249,10 +261,10 @@ const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan, kategoriL
         );
 
         const chargeResponse = await Promise.race([midtransPromise, timeoutPromise]);
-
         qrisUrl = chargeResponse?.actions?.[0]?.url;
+        
         if (!qrisUrl) throw new Error('Midtrans tidak mengembalikan QRIS URL');
-
+        
         midtransSuccess = true;
         console.log("✅ Midtrans sukses");
     } catch (error) {
@@ -266,7 +278,6 @@ const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan, kategoriL
     try { await ctx.deleteMessage(); } catch (e) {}
 
     if (midtransSuccess && qrisUrl) {
-        // KIRIM QRIS MIDTRANS
         try {
             await ctx.replyWithPhoto(
                 { url: qrisUrl },
@@ -276,36 +287,25 @@ const prosesTagihan = async (ctx, namaLayanan, hargaAsli, kodeLayanan, kategoriL
                     ...Markup.inlineKeyboard([[Markup.button.callback('❌ Batalkan Pesanan', 'batal_pesanan')]])
                 }
             );
-            console.log("✅ QRIS Midtrans terkirim\n");
         } catch (sendErr) {
-            console.log("❌ Gagal kirim QRIS Midtrans:", sendErr.message);
-            // Coba fallback juga
-            midtransSuccess = false;
+            midtransSuccess = false; // Gagal kirim foto, paksa ke fallback
         }
     }
 
     if (!midtransSuccess) {
-        // KIRIM QRIS FALLBACK STATIS
         try {
             await ctx.replyWithPhoto(
                 { url: QRIS_FALLBACK_URL },
                 {
-                    caption: `⚠️ _Sistem otomatis sedang maintenance. Jalur manual..._\n\n✅ *Tagihan Dibuat!*\n\n🧾 *Order ID:* \`${order_id}\`\n💻 *Layanan:* ${namaLayanan}\n💰 *Total Bayar:* *Rp${totalBayar.toLocaleString('id-ID')}*\n\n⚠️ *PENTING:* Transfer *TEPAT* sejumlah nominal di atas hingga 3 digit terakhir.\n\n_Setelah transfer, copy Order ID di atas & kirim ke Admin untuk verifikasi manual._`,
+                    caption: `⚠️ _Sistem otomatis sedang maintenance. Mengalihkan ke jalur manual..._\n\n✅ *Tagihan Dibuat!*\n\n🧾 *Order ID:* \`${order_id}\`\n💻 *Layanan:* ${namaLayanan}\n💰 *Total Bayar:* *Rp${totalBayar.toLocaleString('id-ID')}*\n\n⚠️ *PENTING:* Transfer *TEPAT* sejumlah nominal di atas hingga 3 digit terakhir.\n\n_Setelah transfer, copy Order ID di atas & kirim ke Admin untuk verifikasi manual._`,
                     parse_mode: 'Markdown',
                     ...Markup.inlineKeyboard([[Markup.button.callback('❌ Batalkan Pesanan', 'batal_pesanan')]])
                 }
             );
-            console.log("✅ QRIS Fallback terkirim\n");
         } catch (sendErr2) {
-            console.log("❌ Gagal kirim fallback:", sendErr2.message);
-            // Terakhir, kirim text saja
             try {
-                await ctx.reply(
-                    `✅ Tagihan Dibuat!\n\nOrder ID: ${order_id}\nLayanan: ${namaLayanan}\nTotal: Rp ${totalBayar.toLocaleString('id-ID')}\n\nSistem sedang sibuk. Silakan kirim Order ID di atas ke Admin untuk verifikasi manual.`
-                );
-            } catch (finalErr) {
-                console.log("❌❌ Semua pengiriman gagal:", finalErr.message);
-            }
+                await ctx.reply(`✅ Tagihan Dibuat!\n\nOrder ID: ${order_id}\nLayanan: ${namaLayanan}\nTotal: Rp ${totalBayar.toLocaleString('id-ID')}\n\nSistem sedang sibuk. Silakan kirim Order ID di atas ke Admin.`);
+            } catch (finalErr) {}
         }
     }
 };
